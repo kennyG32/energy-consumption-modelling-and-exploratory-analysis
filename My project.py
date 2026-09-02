@@ -1,26 +1,191 @@
 # %%
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import json
 import os
-import re 
-import xlrd
-import openpyxl
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
+import openpyxl
+import pandas as pd
+import re
+import seaborn as sns
+import xlrd
+from IPython.display import display
+
+DISPLAY_OPTIONS = {
+    "display.max_rows": None,
+    "display.max_columns": None,
+}
+
+DEFAULT_DATETIME_COLUMNS = ["timestamp", "Timestamp", "time", "date", "Date", "Time"]
 
 
+def configure_dataframe_display():
+    for option, value in DISPLAY_OPTIONS.items():
+        pd.set_option(option, value)
+
+
+def build_table_styles(header_color, cell_align="left", row_heading_color=None):
+    table_styles = [
+        {
+            "selector": "th",
+            "props": [
+                ("background-color", header_color),
+                ("color", "white"),
+                ("text-align", "center"),
+                ("border", "1px solid #ddd"),
+                ("padding", "10px"),
+                ("font-weight", "bold"),
+            ],
+        },
+        {
+            "selector": "td",
+            "props": [
+                ("text-align", cell_align),
+                ("border", "1px solid #ddd"),
+                ("padding", "8px"),
+                ("color", "#333333"),
+            ],
+        },
+    ]
+
+    if row_heading_color is not None:
+        table_styles.append(
+            {
+                "selector": "th.row_heading",
+                "props": [
+                    ("background-color", row_heading_color),
+                    ("color", "#333333"),
+                    ("text-align", "left"),
+                    ("font-weight", "bold"),
+                ],
+            }
+        )
+
+    return table_styles
+
+
+def display_styled_table(
+    dataframe,
+    header_color="#4CAF50",
+    cell_align="left",
+    row_heading_color=None,
+    precision=None,
+):
+    configure_dataframe_display()
+    styler = dataframe.style.set_properties(
+        **{
+            "background-color": "#ffffff",
+            "border": "1px solid #ddd",
+            "color": "#000000",
+            "padding": "8px",
+            "text-align": cell_align,
+        }
+    ).set_table_styles(
+        build_table_styles(
+            header_color,
+            cell_align=cell_align,
+            row_heading_color=row_heading_color,
+        )
+    )
+
+    if precision is not None:
+        styler = styler.format(precision=precision)
+
+    display(styler)
+
+
+def make_hashable(value):
+    if isinstance(value, (list, dict)):
+        return str(value)
+    return value
+
+
+def drop_duplicate_rows(dataframe, subset=None):
+    comparable = dataframe.copy()
+    for column in comparable.select_dtypes(include=["object", "string"]).columns:
+        comparable[column] = comparable[column].map(make_hashable)
+
+    duplicate_mask = comparable.duplicated(subset=subset, keep="first")
+    return dataframe.loc[~duplicate_mask].copy(), int(duplicate_mask.sum())
+
+
+def convert_numeric_like_columns(dataframe):
+    cleaned = dataframe.copy()
+    for column in cleaned.select_dtypes(include=["object", "string"]).columns:
+        converted = pd.to_numeric(cleaned[column], errors="coerce")
+        if converted.notna().sum() > 0:
+            cleaned[column] = converted
+    return cleaned
+
+
+def fill_missing_values(dataframe, placeholder="Unknown"):
+    cleaned = dataframe.copy()
+    numeric_columns = cleaned.select_dtypes(include=["number"]).columns
+    for column in numeric_columns:
+        cleaned[column] = cleaned[column].fillna(cleaned[column].mean())
+
+    non_numeric_columns = cleaned.select_dtypes(exclude=["number"]).columns
+    for column in non_numeric_columns:
+        cleaned[column] = cleaned[column].fillna(placeholder)
+
+    return cleaned
+
+
+def convert_datetime_columns(dataframe, candidate_names=None):
+    cleaned = dataframe.copy()
+    for column_name in candidate_names or DEFAULT_DATETIME_COLUMNS:
+        if column_name in cleaned.columns:
+            cleaned[column_name] = pd.to_datetime(cleaned[column_name], errors="coerce")
+    return cleaned
+
+
+def clean_dataframe(dataframe, duplicate_subset=None, datetime_candidates=None):
+    cleaned, duplicate_count = drop_duplicate_rows(dataframe, subset=duplicate_subset)
+    missing_before = cleaned.isna().sum()
+    cleaned = convert_numeric_like_columns(cleaned)
+    cleaned = fill_missing_values(cleaned)
+    cleaned = convert_datetime_columns(cleaned, candidate_names=datetime_candidates)
+    missing_after = cleaned.isna().sum()
+    return cleaned, duplicate_count, missing_before, missing_after
+
+
+def print_cleaning_summary(duplicate_count, missing_before, missing_after, info_title):
+    print("\nDuplicate rows before cleaning:", duplicate_count)
+    print("Duplicate rows after cleaning: 0")
+    print("\nMissing values per column BEFORE filling:\n", missing_before)
+    print("Missing values per column AFTER filling:\n", missing_after)
+    print(f"\n{info_title}")
+
+
+def load_json_dataset(json_path):
+    with open(json_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    records = payload if isinstance(payload, list) else [payload]
+    return pd.json_normalize(records)
+
+
+def load_json_tree(root_dir):
+    frames = []
+    root_path = Path(root_dir)
+
+    for json_path in root_path.rglob("*.json"):
+        flat = load_json_dataset(json_path)
+        flat["source_file"] = json_path.name
+        flat["source_path"] = str(json_path.relative_to(root_path))
+        frames.append(flat)
+
+    return frames
 
 
 # %%
-import pandas as pd
 
 # Load the CSV file
 df = pd.read_csv('energy_measurement.csv')  # Change filename if needed
 
 # Show all rows and columns in the output
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
+configure_dataframe_display()
 
 # Display the DataFrame with all rows in blue and all columns in white
 def highlight_rows(s):
@@ -34,8 +199,6 @@ styled_df = df.style.apply(highlight_rows, axis=1).map(highlight_columns)
 display(styled_df)
 
 # %%
-import pandas as pd
-from IPython.display import display
 
 # Load the CSV file
 df = pd.read_csv('energy_measurement.csv')
@@ -45,47 +208,12 @@ print(f"Initial shape: {df.shape}")
 print("\nColumn names and types:")
 print(df.dtypes)
 
-# Remove duplicate rows
-print("\nDuplicate rows before cleaning:", df.duplicated().sum())
-df = df.drop_duplicates().copy()
-print("Duplicate rows after cleaning:", df.duplicated().sum())
-
-# Report missing values
-print("\nMissing values per column BEFORE filling:\n", df.isna().sum())
-
-# Try numeric conversion on object columns
-for col in df.select_dtypes(include=["object"]).columns:
-    converted = pd.to_numeric(df[col], errors="coerce")
-    if converted.notna().sum() > 0:
-        df[col] = converted
-
-# Fill numeric columns with mean
-numeric_cols = df.select_dtypes(include=["number"]).columns
-for col in numeric_cols:
-    mean_val = df[col].mean()
-    df[col] = df[col].fillna(mean_val)
-
-# Fill non-numeric columns with placeholder
-non_numeric_cols = df.select_dtypes(exclude=["number"]).columns
-for col in non_numeric_cols:
-    df[col] = df[col].fillna("Unknown")
-
-print("Missing values per column AFTER filling:\n", df.isna().sum())
-
-# Convert timestamp/datetime columns if present
-for name in ["timestamp", "Timestamp", "time", "date", "Date", "Time"]:
-    if name in df.columns:
-        df[name] = pd.to_datetime(df[name], errors="coerce")
-
-print("\nFinal DataFrame info:")
-df.info()
-
-# Save cleaned energy data for later analysis
-df_energy_clean = df
+df_energy_clean, duplicate_count, missing_before, missing_after = clean_dataframe(df)
+print_cleaning_summary(duplicate_count, missing_before, missing_after, "Final DataFrame info:")
+df_energy_clean.info()
 
 # Display cleaned data
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
+configure_dataframe_display()
 display(df_energy_clean)
 
 # %%
@@ -94,27 +222,10 @@ average_power = df_energy_clean['Power'].mean()
 print(f"Average Power: {average_power:.2f} W")
 
 # %%
-import os
-import json
-import pandas as pd
-from IPython.display import display
 
 # Objective-score root folder
 root = "../objective-score"
-frames = []
-
-for dirpath, _, filenames in os.walk(root):
-    for filename in filenames:
-        if filename.lower().endswith(".json"):
-            filepath = os.path.join(dirpath, filename)
-            with open(filepath, "r", encoding="utf-8") as f:
-                obj = json.load(f)
-
-            # Normalize dict or list JSON
-            flat = pd.json_normalize(obj if isinstance(obj, list) else [obj])
-            flat["source_file"] = filename
-            flat["source_path"] = os.path.relpath(filepath, root)
-            frames.append(flat)
+frames = load_json_tree(root)
 
 print(f"Loaded {len(frames)} JSON files from {root}")
 
@@ -123,186 +234,46 @@ if frames:
     print(f"Combined shape: {df.shape}")
     print(f"\nColumns: {list(df.columns)}")
     
-    pd.set_option("display.max_rows", None)
-    pd.set_option("display.max_columns", None)
+    configure_dataframe_display()
     display(df)
 else:
     print("No JSON files found.")
 
 # %%
-import pandas as pd
-from IPython.display import display
 
 # Assuming df is already loaded from previous cell with objective data
-# Convert unhashable types (lists, dicts) to strings for duplicate detection
-hashable_df = df.copy()
-for col in hashable_df.columns:
-    if hashable_df[col].dtype == "object":
-        hashable_df[col] = hashable_df[col].apply(lambda x: str(x) if isinstance(x, (list, dict)) else x)
-
-# Remove duplicates
-print("Duplicate rows before cleaning:", hashable_df.duplicated().sum())
-df = df.loc[~hashable_df.duplicated(keep='first')].copy()
-print("Duplicate rows after cleaning: 0")
-
-# Try numeric conversion on object columns (pandas 3.0 safe)
-for col in df.select_dtypes(include=["object", "string"]).columns:
-    converted = pd.to_numeric(df[col], errors="coerce")
-    if converted.notna().sum() > 0:
-        df[col] = converted
-
-# Missing values before fill
-print("\nMissing values per column BEFORE filling:\n", df.isna().sum())
-
-# Fill numeric NaN with mean
-numeric_cols = df.select_dtypes(include=["number"]).columns
-for col in numeric_cols:
-    mean_val = df[col].mean()
-    df[col] = df[col].fillna(mean_val)
-
-# Fill non-numeric NaN with placeholder
-non_numeric_cols = df.select_dtypes(exclude=["number"]).columns
-for col in non_numeric_cols:
-    df[col] = df[col].fillna("Unknown")
-
-# Optional datetime conversion
-for name in ["timestamp", "Timestamp", "time", "date"]:
-    if name in df.columns:
-        df[name] = pd.to_datetime(df[name], errors="coerce")
-
-print("Missing values per column AFTER filling:\n", df.isna().sum())
-print("\nDataFrame info:")
+df, duplicate_count, missing_before, missing_after = clean_dataframe(
+    df,
+    datetime_candidates=["timestamp", "Timestamp", "time", "date"],
+)
+print_cleaning_summary(duplicate_count, missing_before, missing_after, "DataFrame info:")
 df.info()
 
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
+configure_dataframe_display()
 display(df)
 
 # %%
-import json
-import pandas as pd
-from IPython.display import display
 
 # Load subjective score JSON file
 subjective_path = "../subjective-score/subjective_score.json"
 
-with open(subjective_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-# Convert to DataFrame
-df = pd.json_normalize(data if isinstance(data, list) else [data])
+df = load_json_dataset(subjective_path)
 
 print(f"Loaded subjective dataset shape: {df.shape}")
 print(f"\nColumns: {list(df.columns)}")
 
-# Display as formatted table with better styling
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
-
-# Style the table with better visibility
-styled_df = df.style.set_properties(**{
-    'background-color': '#ffffff',
-    'border': '1px solid #ddd',
-    'color': '#000000',
-    'padding': '8px'
-}).set_table_styles([
-    {'selector': 'th', 'props': [
-        ('background-color', '#4CAF50'),
-        ('color', 'white'),
-        ('text-align', 'center'),
-        ('border', '1px solid #ddd'),
-        ('padding', '10px'),
-        ('font-weight', 'bold')
-    ]},
-    {'selector': 'td', 'props': [
-        ('text-align', 'left'),
-        ('border', '1px solid #ddd'),
-        ('padding', '8px'),
-        ('color', '#333333')
-    ]},
-])
-
-display(styled_df)
+display_styled_table(df, header_color="#4CAF50")
 
 # %%
-import pandas as pd
-from IPython.display import display
 
 # Assuming df is already loaded from previous cell with subjective data
-
-# Convert unhashable types (lists, dicts) to strings for duplicate detection
-hashable_df = df.copy()
-for col in hashable_df.columns:
-    if hashable_df[col].dtype == "object":
-        hashable_df[col] = hashable_df[col].apply(lambda x: str(x) if isinstance(x, (list, dict)) else x)
-
-# Remove duplicate rows
-print("Duplicate rows before cleaning:", hashable_df.duplicated().sum())
-df = df.loc[~hashable_df.duplicated(keep='first')].copy()
-print("Duplicate rows after cleaning: 0")
-
-# Report missing values
-print("\nMissing values per column BEFORE filling:\n", df.isna().sum())
-
-# Try numeric conversion on object columns
-for col in df.select_dtypes(include=["object", "string"]).columns:
-    converted = pd.to_numeric(df[col], errors="coerce")
-    if converted.notna().sum() > 0:
-        df[col] = converted
-
-# Fill numeric columns with mean
-numeric_cols = df.select_dtypes(include=["number"]).columns
-for col in numeric_cols:
-    mean_val = df[col].mean()
-    df[col] = df[col].fillna(mean_val)
-
-# Fill non-numeric columns with placeholder
-non_numeric_cols = df.select_dtypes(exclude=["number"]).columns
-for col in non_numeric_cols:
-    df[col] = df[col].fillna("Unknown")
-
-print("Missing values per column AFTER filling:\n", df.isna().sum())
-
-# Convert timestamp/datetime columns if present
-for name in ["timestamp", "Timestamp", "time", "date", "Date", "Time"]:
-    if name in df.columns:
-        df[name] = pd.to_datetime(df[name], errors="coerce")
-
-print("\nFinal DataFrame info:")
+df, duplicate_count, missing_before, missing_after = clean_dataframe(df)
+print_cleaning_summary(duplicate_count, missing_before, missing_after, "Final DataFrame info:")
 df.info()
 
-# Display cleaned data in styled table
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
-
-styled_df = df.style.set_properties(**{
-    'background-color': '#ffffff',
-    'border': '1px solid #ddd',
-    'color': '#000000',
-    'padding': '8px'
-}).set_table_styles([
-    {'selector': 'th', 'props': [
-        ('background-color', '#4CAF50'),
-        ('color', 'white'),
-        ('text-align', 'center'),
-        ('border', '1px solid #ddd'),
-        ('padding', '10px'),
-        ('font-weight', 'bold')
-    ]},
-    {'selector': 'td', 'props': [
-        ('text-align', 'left'),
-        ('border', '1px solid #ddd'),
-        ('padding', '8px'),
-        ('color', '#333333')
-    ]},
-])
-
-display(styled_df)
+display_styled_table(df, header_color="#4CAF50")
 
 # %%
-import os
-import pandas as pd
-from IPython.display import display
 
 # Load test-sequence directory structure and files
 root = "../test-sequence"
@@ -325,40 +296,11 @@ if data:
     print(f"\nDataFrame shape: {df.shape}")
     print(f"\nFolders found: {df['folder'].unique()}")
     
-    pd.set_option("display.max_rows", None)
-    pd.set_option("display.max_columns", None)
-    
-    # Style the table
-    styled_df = df.style.set_properties(**{
-        'background-color': '#ffffff',
-        'border': '1px solid #ddd',
-        'color': '#000000',
-        'padding': '8px'
-    }).set_table_styles([
-        {'selector': 'th', 'props': [
-            ('background-color', '#2196F3'),
-            ('color', 'white'),
-            ('text-align', 'center'),
-            ('border', '1px solid #ddd'),
-            ('padding', '10px'),
-            ('font-weight', 'bold')
-        ]},
-        {'selector': 'td', 'props': [
-            ('text-align', 'left'),
-            ('border', '1px solid #ddd'),
-            ('padding', '8px'),
-            ('color', '#333333')
-        ]},
-    ])
-    
-    display(styled_df)
+    display_styled_table(df, header_color="#2196F3")
 else:
     print("No test sequence files found.")
 
 # %%
-import os
-import pandas as pd
-from IPython.display import display
 
 # Assuming df is already loaded from previous cell with test-sequence data
 
@@ -367,9 +309,9 @@ root = "../test-sequence"
 print(f"Initial test-sequence dataset shape: {df.shape}")
 
 # Remove duplicate filenames (keep first occurrence)
-print("\nDuplicate rows before cleaning:", df.duplicated(subset=['filename']).sum())
-df = df.drop_duplicates(subset=['filename'], keep='first').copy()
-print("Duplicate rows after cleaning:", df.duplicated(subset=['filename']).sum())
+df, duplicate_count, _, _ = clean_dataframe(df, duplicate_subset=["filename"], datetime_candidates=[])
+print("\nDuplicate rows before cleaning:", duplicate_count)
+print("Duplicate rows after cleaning: 0")
 
 # Check file existence and size
 df['file_exists'] = df['file_path'].apply(lambda x: os.path.exists(os.path.join(root, x)))
@@ -396,34 +338,8 @@ print(df['folder'].value_counts().sort_index())
 print("\nFile size statistics (MB):")
 print(df['file_size_mb'].describe())
 
-# Display cleaned data in styled table
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
-
-styled_df = df.style.set_properties(**{
-    'background-color': '#ffffff',
-    'border': '1px solid #ddd',
-    'color': '#000000',
-    'padding': '8px'
-}).set_table_styles([
-    {'selector': 'th', 'props': [
-        ('background-color', '#FF9800'),
-        ('color', 'white'),
-        ('text-align', 'center'),
-        ('border', '1px solid #ddd'),
-        ('padding', '10px'),
-        ('font-weight', 'bold')
-    ]},
-    {'selector': 'td', 'props': [
-        ('text-align', 'left'),
-        ('border', '1px solid #ddd'),
-        ('padding', '8px'),
-        ('color', '#333333')
-    ]},
-])
-
 print("\nCleaned test-sequence dataset:")
-display(styled_df)
+display_styled_table(df, header_color="#FF9800")
 
 # %%
 import pandas as pd
@@ -459,40 +375,16 @@ print("SUMMARY STATISTICS")
 print("=" * 80)
 print(stats_df)
 
-# Display with styled table
-styled_stats = stats_df.style.set_properties(**{
-    'background-color': '#ffffff',
-    'border': '1px solid #ddd',
-    'color': '#000000',
-    'padding': '8px',
-    'text-align': 'right'
-}).set_table_styles([
-    {'selector': 'th', 'props': [
-        ('background-color', '#9C27B0'),
-        ('color', 'white'),
-        ('text-align', 'center'),
-        ('border', '1px solid #ddd'),
-        ('padding', '10px'),
-        ('font-weight', 'bold')
-    ]},
-    {'selector': 'td', 'props': [
-        ('text-align', 'right'),
-        ('border', '1px solid #ddd'),
-        ('padding', '8px'),
-        ('color', '#333333')
-    ]},
-    {'selector': 'th.row_heading', 'props': [
-        ('background-color', '#E1BEE7'),
-        ('color', '#333333'),
-        ('text-align', 'left'),
-        ('font-weight', 'bold')
-    ]},
-]).format(precision=4)
-
 print("\n" + "=" * 80)
 print("FORMATTED STATISTICS TABLE")
 print("=" * 80)
-display(styled_stats)
+display_styled_table(
+    stats_df,
+    header_color="#9C27B0",
+    cell_align="right",
+    row_heading_color="#E1BEE7",
+    precision=4,
+)
 
 # %%
 import pandas as pd
@@ -604,29 +496,7 @@ summary_data = {
 }
 summary_df = pd.DataFrame(summary_data)
 
-styled_summary = summary_df.style.set_properties(**{
-    'background-color': '#ffffff',
-    'border': '1px solid #ddd',
-    'color': '#000000',
-    'padding': '8px'
-}).set_table_styles([
-    {'selector': 'th', 'props': [
-        ('background-color', '#1976D2'),
-        ('color', 'white'),
-        ('text-align', 'center'),
-        ('border', '1px solid #ddd'),
-        ('padding', '10px'),
-        ('font-weight', 'bold')
-    ]},
-    {'selector': 'td', 'props': [
-        ('text-align', 'left'),
-        ('border', '1px solid #ddd'),
-        ('padding', '8px'),
-        ('color', '#333333')
-    ]},
-])
-
-display(styled_summary)
+display_styled_table(summary_df, header_color="#1976D2")
 
 # %%
 # Count each video name by device
@@ -2698,7 +2568,7 @@ display(unusual[display_cols].head(100))
 
 
 # %%
-%pip install xgboost scikit-learn
+# Install xgboost and scikit-learn in the notebook environment if needed.
 
 # %%
 import warnings
