@@ -37,6 +37,14 @@ The project covers the following stages:
    - Random forest regression
    - XGBoost regression when available
 
+## Key Findings
+
+- The modelling dataset contains 704 observations covering 4 devices, 4 video scenarios, 11 luminance-reduction levels, and 4 bitrate settings.
+- The average recorded power consumption across the analysed dataset is 57.11 W.
+- Outlier screening found no unusual patterns in luminance reduction or bitrate, while only 8 power observations were flagged as potential realistic extremes; 696 of 704 rows remained in the normal range.
+- In the grouped holdout by video, Random Forest delivered the strongest predictive performance with RMSE = 0.008176 Wh and R2 = 0.951044.
+- In the grouped holdout by device and video, the linear model with controls performed best with RMSE = 0.017782 Wh and R2 = 0.947683, showing that device and content context explain a large share of energy variation.
+
 ## Main Variables Used
 
 The analysis primarily uses the following fields from the dataset:
